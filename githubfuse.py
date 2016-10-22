@@ -2,6 +2,7 @@
 GithubFS is a solution to mount github.com in your filesystem.
 """
 import os
+import argparse
 from configparser import ConfigParser
 from functools import lru_cache
 import stat
@@ -9,6 +10,11 @@ import fuse
 import github
 
 
+def logged(meth):
+    def wrapper(*args):
+        print("LOGGING {meth} {args}".format(**locals()))
+        return meth(*args) #self, ... other args
+    return wrapper
 
 def get_token(filename='config.ini'):
     """
@@ -71,7 +77,7 @@ class FakeStat():
         self.st_mode |= stat.S_IFDIR
 
 
-class GithubOperations(fuse.Operations):
+class GithubOperations(fuse.Operations, fuse.LoggingMixIn):
     """
     Where all github fs magic happens.
 
@@ -79,69 +85,73 @@ class GithubOperations(fuse.Operations):
     """
     def __init__(self, root='/tmp/github'):
         self.root = root
+        self.verbose = True
         if not os.path.exists(self.root):
             os.mkdir(self.root)
 
     def _full_path(self, path):
-        #print("PATH BEFORE REWRITE: ", path)
+        if not isinstance(path, str):
+            path = path.decode()
         path = path.lstrip("/")
         #print("**** JOINING {self.root} and {path}".format(**locals()))
         fullpath = os.path.join(self.root, path)
         #print(" AFTER JOIN PATH {path}, FULLPATH {fullpath} ".format(**locals()))
         return fullpath
 
-    def access(self, path, mode):
-        full_path = self._full_path(path)
-        return os.access(full_path, mode)
-
+    # def access(self, path, mode):
+    #     full_path = self._full_path(path)
+    #     #return os.access(full_path, mode)
+    @logged
     def chmod(self, path, mode):
         full_path = self._full_path(path)
         return os.chmod(full_path, mode)
-
+    @logged
     def chown(self, path, uid, gid):
         full_path = self._full_path(path)
         return os.chown(full_path, uid, gid)
 
+    @logged
     def getattr(self, path, fh=None):
         full_path = self._full_path(path)
 
-        print("In get attr {path} ,{full_path}".format(**locals()))
-        # path = path.lstrip("/")  # /xmonader/plyini
         if os.path.exists(full_path):
-            st = os.lstat(full_path)
+            st = os.stat(full_path)
             return dict((key, getattr(st, key)) for key in ('st_atime', 'st_ctime',
                                                             'st_gid', 'st_mode', 'st_mtime', 'st_nlink', 'st_size', 'st_uid'))
         else:
             fakestat = FakeStat()
             # user profile, repos are directories.
-            if path.count("/") > 0:  # userprofile or repo
+            if path.count("/") >= 0:  # userprofile or repo
                 fakestat.set_isdir()
 
             return {x: y for x, y in fakestat.__dict__.items() if 'st' in x}
-
+    @logged
     def readdir(self, path, fh):
-        #print("IN READDIR::: {path} ".format(path=path))
         dirents = ['.', '..']
         full_path = self._full_path(path)
         path = path.lstrip("/")  # /xmonader/plyini
 
-        if path.count("/") == 0:
-            repos = get_repos_user(path.strip("/"))
-            reposdirs = [x.full_name.split("/")[1] for x in repos]
-            dirents.extend(reposdirs)
-
-        if not os.path.exists(full_path) and path.count("/") == 1:
-            #print("Will clone repo for access")
-            os.system("git clone https://github.com/{path} {full_path}".format(**locals()))
-        if os.path.exists(full_path):
+        if path == '': # root directory of github:
             dirents.extend(os.listdir(full_path))
+        else:
+            if path.count("/") == 0:
+                repos = get_repos_user(path.strip("/"))
+                reposdirs = [x.full_name.split("/")[1] for x in repos]
+                dirents.extend(reposdirs)
+
+            if not os.path.exists(full_path) and path.count("/") == 1:
+                # DO SHALLOW CLONE. 
+                os.system("git clone https://github.com/{path} {full_path} --depth=1".format(**locals())) #
+
+            if os.path.exists(full_path):
+                dirents.extend(os.listdir(full_path))
 
         # unique entries (because we might have them already in the
-        # filesystem.)
+        # filesystem.
         dirents = set(dirents)
         for r in dirents:
             yield r
-
+    @logged
     def readlink(self, path):
         pathname = os.readlink(self._full_path(path))
         if pathname.startswith("/"):
@@ -149,71 +159,87 @@ class GithubOperations(fuse.Operations):
             return os.path.relpath(pathname, self.root)
         else:
             return pathname
-
+    
+    @logged
     def mknod(self, path, mode, dev):
         return os.mknod(self._full_path(path), mode, dev)
-
+    
+    @logged
     def rmdir(self, path):
         full_path = self._full_path(path)
         return os.rmdir(full_path)
-
+    
+    @logged
     def mkdir(self, path, mode):
         return os.mkdir(self._full_path(path), mode)
-
+    
+    @logged
     def statfs(self, path):
         full_path = self._full_path(path)
         stv = os.statvfs(full_path)
         return dict((key, getattr(stv, key)) for key in ('f_bavail', 'f_bfree',
                                                          'f_blocks', 'f_bsize', 'f_favail', 'f_ffree', 'f_files', 'f_flag',
                                                          'f_frsize', 'f_namemax'))
-
+    @logged
     def unlink(self, path):
         return os.unlink(self._full_path(path))
-
+    
+    @logged
     def symlink(self, name, target):
         return os.symlink(name, self._full_path(target))
-
+    
+    @logged
     def rename(self, old, new):
         return os.rename(self._full_path(old), self._full_path(new))
-
+    
+    @logged
     def link(self, target, name):
         return os.link(self._full_path(target), self._full_path(name))
 
+    @logged
     def utimens(self, path, times=None):
         return os.utime(self._full_path(path), times)
 
+    @logged
     def open(self, path, flags):
         full_path = self._full_path(path)
         return os.open(full_path, flags)
 
+    @logged
     def create(self, path, mode, fi=None):
         full_path = self._full_path(path)
         return os.open(full_path, os.O_WRONLY | os.O_CREAT, mode)
 
+    @logged
     def read(self, path, length, offset, fh):
         os.lseek(fh, offset, os.SEEK_SET)
         return os.read(fh, length)
 
+    @logged
     def write(self, path, buf, offset, fh):
         os.lseek(fh, offset, os.SEEK_SET)
         return os.write(fh, buf)
-
+    
+    @logged
     def truncate(self, path, length, fh=None):
         full_path = self._full_path(path)
         with open(full_path, 'r+') as f:
             f.truncate(length)
 
+    @logged
     def flush(self, path, fh):
         return os.fsync(fh)
 
+    @logged
     def release(self, path, fh):
         return os.close(fh)
-
+    
+    @logged
     def fsync(self, path, fdatasync, fh):
         return self.flush(path, fh)
 
 
-def mount(githubdir, mntpoint):
+def mount(githubdir, mntpoint, verbose=True, foreground=True):
     """
     Mount GithubFuse filesystem to a mountpoint
 
@@ -221,7 +247,16 @@ def mount(githubdir, mntpoint):
     @param mntpoint  str: mount point to mount the fuse filesystem to. (i.e /mnt/github.com)
     """
     fuse.FUSE(GithubOperations(root=githubdir),
-              mntpoint, nothreads=True, foreground=True)
+              mntpoint, nothreads=True, foreground=foreground)
+
+def cli():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mountpoint", dest="mountpoint", help="Mount point")
+    parser.add_argument("--githubdir", dest="githubdir", help="Github caching directory.")
+    parser.add_argument("--foreground", dest="foreground", action="store_true", help="Show in foreground." )
+    
+    args = parser.parse_args()
+    mount(args.githubdir, mntpoint=args.mountpoint, foreground=args.foreground)
 
 if __name__ == "__main__":
-    mount("/tmp/githubtest/", "/mnt/githubtest/")
+    cli()
