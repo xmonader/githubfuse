@@ -21,7 +21,7 @@ token =  ACCESS TOKEN GOES HERE
 ```
 python3 githubfuse.py --mountpoint="/mnt/githubtest" --githubdir="/tmp/githubtest"
 ```
-It takes optional `--foreground` to show in foreground. (Turn it own and try to access files in your mountpoint and see it while cloning :) 
+It takes optional `--foreground` to show in foreground. (Turn it on and try to access files in your mountpoint and see it while cloning :) 
 
 
 
