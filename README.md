@@ -35,3 +35,6 @@ import plyini
 
 print(plyini)
 ```
+## Notes
+It depends of fusepy library.
+Thanks to this article as well that got me started https://www.stavros.io/posts/python-fuse-filesystem/
