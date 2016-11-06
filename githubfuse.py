@@ -3,6 +3,7 @@ GithubFS is a solution to mount github.com in your filesystem.
 """
 import os
 import argparse
+import re
 from configparser import ConfigParser
 from functools import lru_cache
 import stat
@@ -11,6 +12,11 @@ import github
 
 
 def logged(meth):
+    """
+    General decorator for instance methods.
+
+    @param meth MethodType: instance method. 
+    """
     def wrapper(*args):
         print("LOGGING {meth} {args}".format(**locals()))
         return meth(*args) #self, ... other args
@@ -18,7 +24,7 @@ def logged(meth):
 
 def get_token(filename='config.ini'):
     """
-    Get api token from ini file
+    Get api token from ini filename
     @param filename str: filename
     """
     cp = ConfigParser()
@@ -90,17 +96,13 @@ class GithubOperations(fuse.Operations, fuse.LoggingMixIn):
             os.mkdir(self.root)
 
     def _full_path(self, path):
+        path = re.sub("@\w+", "", path)  # remove commit-ish
         if not isinstance(path, str):
             path = path.decode()
         path = path.lstrip("/")
-        #print("**** JOINING {self.root} and {path}".format(**locals()))
         fullpath = os.path.join(self.root, path)
-        #print(" AFTER JOIN PATH {path}, FULLPATH {fullpath} ".format(**locals()))
         return fullpath
 
-    # def access(self, path, mode):
-    #     full_path = self._full_path(path)
-    #     #return os.access(full_path, mode)
     @logged
     def chmod(self, path, mode):
         full_path = self._full_path(path)
@@ -127,9 +129,17 @@ class GithubOperations(fuse.Operations, fuse.LoggingMixIn):
             return {x: y for x, y in fakestat.__dict__.items() if 'st' in x}
     @logged
     def readdir(self, path, fh):
+        #/xmonader
+        #/xmonader/plyini
+        #/xmonader/plyini@master/
         dirents = ['.', '..']
         full_path = self._full_path(path)
-        path = path.lstrip("/")  # /xmonader/plyini
+        path = path.lstrip("/")  # /xmonader/plyini[@COMMITISH]
+
+        branchname = "master"
+        ms = re.findall("@(\w+)", path) 
+        if ms:
+            branchname = ms[0]
 
         if path == '': # root directory of github:
             dirents.extend(os.listdir(full_path))
@@ -141,7 +151,11 @@ class GithubOperations(fuse.Operations, fuse.LoggingMixIn):
 
             if not os.path.exists(full_path) and path.count("/") == 1:
                 # DO SHALLOW CLONE. 
-                os.system("git clone https://github.com/{path} {full_path} --depth=1".format(**locals())) #
+                repopath = path
+                if "@" in path:
+                    repopath = re.findall("(.+)@", path)[0]
+                
+                os.system("git clone https://github.com/{repopath} {full_path} -b {branchname}".format(**locals())) 
 
             if os.path.exists(full_path):
                 dirents.extend(os.listdir(full_path))
@@ -159,20 +173,20 @@ class GithubOperations(fuse.Operations, fuse.LoggingMixIn):
             return os.path.relpath(pathname, self.root)
         else:
             return pathname
-    
+
     @logged
     def mknod(self, path, mode, dev):
         return os.mknod(self._full_path(path), mode, dev)
-    
+
     @logged
     def rmdir(self, path):
         full_path = self._full_path(path)
         return os.rmdir(full_path)
-    
+
     @logged
     def mkdir(self, path, mode):
         return os.mkdir(self._full_path(path), mode)
-    
+
     @logged
     def statfs(self, path):
         full_path = self._full_path(path)
@@ -183,15 +197,15 @@ class GithubOperations(fuse.Operations, fuse.LoggingMixIn):
     @logged
     def unlink(self, path):
         return os.unlink(self._full_path(path))
-    
+
     @logged
     def symlink(self, name, target):
         return os.symlink(name, self._full_path(target))
-    
+
     @logged
     def rename(self, old, new):
         return os.rename(self._full_path(old), self._full_path(new))
-    
+
     @logged
     def link(self, target, name):
         return os.link(self._full_path(target), self._full_path(name))
@@ -219,7 +233,7 @@ class GithubOperations(fuse.Operations, fuse.LoggingMixIn):
     def write(self, path, buf, offset, fh):
         os.lseek(fh, offset, os.SEEK_SET)
         return os.write(fh, buf)
-    
+
     @logged
     def truncate(self, path, length, fh=None):
         full_path = self._full_path(path)
@@ -233,7 +247,7 @@ class GithubOperations(fuse.Operations, fuse.LoggingMixIn):
     @logged
     def release(self, path, fh):
         return os.close(fh)
-    
+
     @logged
     def fsync(self, path, fdatasync, fh):
         return self.flush(path, fh)
@@ -250,11 +264,12 @@ def mount(githubdir, mntpoint, verbose=True, foreground=True):
               mntpoint, nothreads=True, foreground=foreground)
 
 def cli():
+    """Entry point for githubfuse"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--mountpoint", dest="mountpoint", help="Mount point")
     parser.add_argument("--githubdir", dest="githubdir", help="Github caching directory.")
-    parser.add_argument("--foreground", dest="foreground", action="store_true", help="Show in foreground." )
-    
+    parser.add_argument("--foreground", dest="foreground", action="store_true", help="Show in foreground.")
+
     args = parser.parse_args()
     mount(args.githubdir, mntpoint=args.mountpoint, foreground=args.foreground)
 
