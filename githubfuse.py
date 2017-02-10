@@ -258,7 +258,7 @@ def mount(githubdir, mntpoint, verbose=True, foreground=True):
     Mount GithubFuse filesystem to a mountpoint
 
     @param githubdir str: directory where we keep our github packages [cached]
-    @param mntpoint  str: mount point to mount the fuse filesystem to. (i.e /mnt/github.com)
+    @param mntpoint  str: mount point to mount the fuse filesystem to. (e.g. /mnt/github.com)
     """
     fuse.FUSE(GithubOperations(root=githubdir),
               mntpoint, nothreads=True, foreground=foreground)
